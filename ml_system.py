@@ -9,11 +9,20 @@ import pickle
 import json
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
+import time
 
 class MLSystem:
     def __init__(self):
         """Initialize the machine learning system"""
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize paths
+        self.echo_dir = Path.home() / '.deep_tree_echo'
+        self.ml_dir = self.echo_dir / 'ml'
+        self.ml_dir.mkdir(parents=True, exist_ok=True)
+        self.activity_file = self.ml_dir / 'activity.json'
+        self.activities = []
+        self._load_activities()
         
         # Initialize models directory
         self.models_dir = Path.home() / '.deep_tree_echo' / 'models'
@@ -59,6 +68,30 @@ class MLSystem:
         except Exception as e:
             self.logger.error(f"Error loading models: {str(e)}")
             
+    def _load_activities(self):
+        """Load existing activities"""
+        if self.activity_file.exists():
+            try:
+                with open(self.activity_file) as f:
+                    self.activities = json.load(f)
+            except:
+                self.activities = []
+                
+    def _save_activities(self):
+        """Save activities to file"""
+        with open(self.activity_file, 'w') as f:
+            json.dump(self.activities[-1000:], f)
+            
+    def _log_activity(self, description: str, data: Optional[Dict] = None):
+        """Log an ML activity"""
+        activity = {
+            'time': time.time(),
+            'description': description,
+            'data': data or {}
+        }
+        self.activities.append(activity)
+        self._save_activities()
+        
     def _create_visual_model(self):
         """Create visual recognition model"""
         model = models.Sequential([
@@ -389,3 +422,25 @@ class MLSystem:
         except Exception as e:
             self.logger.error(f"Error analyzing patterns: {str(e)}")
             return {}
+            
+    async def update_models(self):
+        """Update ML models"""
+        self._log_activity("Starting model update")
+        try:
+            # Update visual model
+            self._log_activity("Updating visual model")
+            await self.visual_model.update()
+            
+            # Update behavior model
+            self._log_activity("Updating behavior model")
+            await self.behavior_model.update()
+            
+            # Update pattern model
+            self._log_activity("Updating pattern model")
+            await self.pattern_model.update()
+            
+            self._log_activity("Model update complete")
+            
+        except Exception as e:
+            self._log_activity("Error updating models", {'error': str(e)})
+            raise

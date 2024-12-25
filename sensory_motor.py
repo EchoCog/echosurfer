@@ -8,11 +8,22 @@ from pynput import mouse, keyboard
 from PIL import Image
 from io import BytesIO
 from ml_system import MLSystem
+import json
+from pathlib import Path
+from typing import Optional, Dict
 
 class SensoryMotor:
     def __init__(self):
         """Initialize the sensory-motor system"""
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize activity logging
+        self.echo_dir = Path.home() / '.deep_tree_echo'
+        self.sensory_dir = self.echo_dir / 'sensory'
+        self.sensory_dir.mkdir(parents=True, exist_ok=True)
+        self.activity_file = self.sensory_dir / 'activity.json'
+        self.activities = []
+        self._load_activities()
         
         # Configure PyAutoGUI
         pyautogui.FAILSAFE = True
@@ -37,6 +48,30 @@ class SensoryMotor:
         
         # Initialize ML system
         self.ml = MLSystem()
+        
+    def _load_activities(self):
+        """Load existing activities"""
+        if self.activity_file.exists():
+            try:
+                with open(self.activity_file) as f:
+                    self.activities = json.load(f)
+            except:
+                self.activities = []
+                
+    def _save_activities(self):
+        """Save activities to file"""
+        with open(self.activity_file, 'w') as f:
+            json.dump(self.activities[-1000:], f)
+            
+    def _log_activity(self, description: str, data: Optional[Dict] = None):
+        """Log a sensory activity"""
+        activity = {
+            'time': time.time(),
+            'description': description,
+            'data': data or {}
+        }
+        self.activities.append(activity)
+        self._save_activities()
         
     def capture_screen(self, region=None):
         """Capture the screen or a specific region"""
@@ -342,3 +377,26 @@ class SensoryMotor:
             
         except Exception as e:
             self.logger.error(f"Error hovering: {str(e)}")
+
+    def process_input(self):
+        """Process sensory input"""
+        try:
+            screenshot = self.capture_screen()
+            if screenshot is not None:
+                self._log_activity("Captured screen")
+                # Process the screenshot...
+                
+            mouse_pos = pyautogui.position()
+            if mouse_pos != self.last_mouse_pos:
+                self._log_activity(
+                    "Mouse movement",
+                    {'from': self.last_mouse_pos, 'to': mouse_pos}
+                )
+                self.last_mouse_pos = mouse_pos
+                
+            # Return processed data...
+            
+        except Exception as e:
+            self._log_activity("Error processing input", {'error': str(e)})
+            self.logger.error(f"Error processing input: {str(e)}")
+            return None
