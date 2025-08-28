@@ -106,7 +106,15 @@ class DeepEchoMonitor:
     def get_process_stats(self, process):
         """Get detailed process statistics"""
         if not process:
-            return None
+            # Return default structure when process not found
+            return {
+                'cpu': {'percent': 0.0, 'num_threads': 0, 'nice': 0},
+                'memory': {'rss': 0, 'vms': 0, 'shared': 0, 'percent': 0.0},
+                'io': {'read_bytes': 0, 'write_bytes': 0},
+                'connections': 0,
+                'open_files': 0,
+                'status': 'not_found'
+            }
             
         try:
             with process.oneshot():
@@ -133,8 +141,17 @@ class DeepEchoMonitor:
                     'open_files': len(process.open_files()),
                     'status': process.status()
                 }
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return None
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            logger.warning(f"Process access error: {e}")
+            # Return fallback stats when process access is denied
+            return {
+                'cpu': {'percent': 0.0, 'num_threads': 0, 'nice': 0},
+                'memory': {'rss': 0, 'vms': 0, 'shared': 0, 'percent': 0.0},
+                'io': {'read_bytes': 0, 'write_bytes': 0},
+                'connections': 0,
+                'open_files': 0,
+                'status': 'access_denied'
+            }
             
     def check_resource_pressure(self, stats):
         """Check for resource pressure and adjust priorities"""
