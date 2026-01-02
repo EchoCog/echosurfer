@@ -67,6 +67,11 @@ class CognitiveArchitecture:
         self.memory_path = Path.home() / '.deep_tree_echo' / 'memories'
         self.memory_path.mkdir(parents=True, exist_ok=True)
         
+        # Initialize performance tracking
+        self.response_times = deque(maxlen=100)  # Store last 100 response times
+        self.learning_timestamps = deque(maxlen=1000)  # Store last 1000 learning events
+        self.memory_capacity = 10000  # Maximum memories to store
+        
         # Initialize cognitive paths
         self.echo_dir = Path.home() / '.deep_tree_echo'
         self.cognitive_dir = self.echo_dir / 'cognitive'
@@ -298,9 +303,48 @@ class CognitiveArchitecture:
         return ideas
     
     def _get_performance_metric(self, metric: str) -> float:
-        """Get performance metric value"""
-        # Placeholder for actual metrics
-        return np.random.random()
+        """Get performance metric value based on actual system performance"""
+        try:
+            current_time = time.time()
+            
+            if metric == 'memory_usage':
+                # Check memory utilization
+                total_memories = len(self.memories)
+                memory_capacity = getattr(self, 'memory_capacity', 10000)
+                return min(1.0, total_memories / memory_capacity)
+                
+            elif metric == 'response_time':
+                # Check average response time based on recent activity
+                if hasattr(self, 'response_times') and self.response_times:
+                    avg_response = sum(self.response_times[-10:]) / len(self.response_times[-10:])
+                    # Normalize: 1.0 for < 1 second, 0.0 for > 10 seconds
+                    return max(0.0, min(1.0, (10 - avg_response) / 9))
+                return 0.8  # Default good response time
+                
+            elif metric == 'learning_rate':
+                # Check how frequently new memories are being created
+                if hasattr(self, 'learning_timestamps') and self.learning_timestamps:
+                    recent_learning = [t for t in self.learning_timestamps if current_time - t < 3600]
+                    # Normalize: 1.0 for 50+ new memories per hour
+                    return min(1.0, len(recent_learning) / 50)
+                return 0.6  # Default moderate learning rate
+                
+            elif metric == 'goal_completion':
+                # Check goal completion rate
+                completed_goals = [g for g in self.goals.values() if g.status == 'completed']
+                total_goals = len(self.goals)
+                if total_goals > 0:
+                    return len(completed_goals) / total_goals
+                return 0.5  # Default neutral completion rate
+                
+            else:
+                # Unknown metric, return moderate performance
+                self.logger.warning(f"Unknown performance metric: {metric}")
+                return 0.7
+                
+        except Exception as e:
+            self.logger.error(f"Error calculating performance metric {metric}: {e}")
+            return 0.5  # Default fallback
     
     def _memory_to_dict(self, memory: Memory) -> Dict:
         """Convert memory to dictionary for storage"""
@@ -328,19 +372,128 @@ class CognitiveArchitecture:
         }
 
     def process_experience(self, experience: str, context: Dict = None) -> None:
-        """Process a new experience"""
-        self._log_activity(f"Processing experience: {experience}", context)
-        # Rest of the method...
+        """Process a new experience and create memories"""
+        start_time = time.time()
+        
+        try:
+            self._log_activity(f"Processing experience: {experience}", context)
+            
+            # Create memory from experience
+            memory_id = f"exp_{int(time.time() * 1000)}"
+            memory = Memory(
+                id=memory_id,
+                content=experience,
+                memory_type=MemoryType.EPISODIC,
+                timestamp=time.time(),
+                associations=set(),
+                emotional_valence=context.get('emotional_valence', 0.0) if context else 0.0,
+                importance=context.get('importance', 0.5) if context else 0.5,
+                context=context or {}
+            )
+            
+            # Store memory
+            self.memories[memory_id] = memory
+            
+            # Track learning event
+            self.learning_timestamps.append(time.time())
+            
+            # Find associations with existing memories
+            self._create_associations(memory)
+            
+            # Update response time tracking
+            response_time = time.time() - start_time
+            self.response_times.append(response_time)
+            
+            self._log_activity("Experience processed successfully", 
+                             {'memory_id': memory_id, 'response_time': response_time})
+            
+        except Exception as e:
+            self.logger.error(f"Error processing experience: {e}")
+            self._log_activity("Experience processing failed", {'error': str(e)})
+            
+    def _create_associations(self, new_memory: Memory):
+        """Create associations between memories based on content similarity"""
+        try:
+            # Simple keyword-based association
+            new_words = set(new_memory.content.lower().split())
+            
+            for memory_id, existing_memory in self.memories.items():
+                if memory_id == new_memory.id:
+                    continue
+                    
+                existing_words = set(existing_memory.content.lower().split())
+                common_words = new_words.intersection(existing_words)
+                
+                # Create association if sufficient overlap
+                if len(common_words) >= 2:
+                    new_memory.associations.add(memory_id)
+                    existing_memory.associations.add(new_memory.id)
+                    
+        except Exception as e:
+            self.logger.error(f"Error creating associations: {e}")
 
     def generate_goal(self, description: str, priority: float = 0.5,
                    deadline: Optional[float] = None) -> Goal:
         """Generate a new goal"""
-        self._log_activity(f"Generated goal: {description}", 
-                         {'priority': priority, 'deadline': deadline})
-        # Rest of the method...
+        try:
+            self._log_activity(f"Generated goal: {description}", 
+                             {'priority': priority, 'deadline': deadline})
+            
+            goal_id = f"goal_{int(time.time() * 1000)}"
+            goal = Goal(
+                id=goal_id,
+                description=description,
+                priority=priority,
+                deadline=deadline,
+                status='active',
+                progress=0.0,
+                context={},
+                dependencies=[],
+                subgoals=[]
+            )
+            
+            self.goals.append(goal)
+            
+            # Add to active goals if priority is high enough
+            if priority > 0.7:
+                self.active_goals.append(goal)
+            
+            self._log_activity("Goal created successfully", {'goal_id': goal_id})
+            return goal
+            
+        except Exception as e:
+            self.logger.error(f"Error generating goal: {e}")
+            # Return a minimal fallback goal
+            return Goal(
+                id=f"fallback_{int(time.time())}",
+                description=description,
+                priority=priority,
+                deadline=deadline,
+                status='error',
+                progress=0.0,
+                context={'error': str(e)},
+                dependencies=[],
+                subgoals=[]
+            )
 
     def update_goal(self, goal: Goal, progress: float) -> None:
         """Update goal progress"""
-        self._log_activity(f"Updated goal: {goal.description}", 
-                         {'progress': progress, 'status': goal.status})
-        # Rest of the method...
+        try:
+            old_progress = goal.progress
+            goal.progress = max(0.0, min(1.0, progress))  # Clamp to [0,1]
+            
+            # Update status based on progress
+            if goal.progress >= 1.0:
+                goal.status = 'completed'
+                # Remove from active goals if present
+                if goal in self.active_goals:
+                    self.active_goals.remove(goal)
+            elif goal.progress > 0.0:
+                goal.status = 'in_progress'
+            
+            self._log_activity(f"Updated goal: {goal.description}", 
+                             {'old_progress': old_progress, 'new_progress': goal.progress, 'status': goal.status})
+            
+        except Exception as e:
+            self.logger.error(f"Error updating goal: {e}")
+            self._log_activity("Goal update failed", {'error': str(e), 'goal': goal.description})

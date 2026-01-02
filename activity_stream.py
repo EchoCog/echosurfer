@@ -157,8 +157,13 @@ class ActivityStream:
             # Draw separator
             self.screen.addstr(2, 0, "=" * (self.screen.getmaxyx()[1] - 1))
             
-        except curses.error:
-            pass
+        except curses.error as e:
+            # Log error but continue - likely a terminal resize issue
+            try:
+                with open('/tmp/activity_stream_errors.log', 'a') as f:
+                    f.write(f"{datetime.now()}: Curses error in draw_header: {e}\n")
+            except:
+                pass  # If we can't log, just continue
             
     def _draw_activity(self, activity: Dict, activity_type: str, line: int):
         """Draw single activity entry with fixed-width formatting"""
@@ -188,8 +193,13 @@ class ActivityStream:
                 self.screen.addstr(line, timestamp_width + 1, message,
                                  self.get_activity_color(activity_type))
                                  
-        except curses.error:
-            pass
+        except curses.error as e:
+            # Log error and continue - could be terminal resize or content too long
+            try:
+                with open('/tmp/activity_stream_errors.log', 'a') as f:
+                    f.write(f"{datetime.now()}: Curses error in _draw_activity: {e}\n")
+            except:
+                pass
             
     def draw_activities(self):
         """Draw activity streams"""

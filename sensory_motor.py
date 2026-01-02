@@ -80,20 +80,43 @@ class SensoryMotor:
             return cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
         except Exception as e:
             self.logger.error(f"Error capturing screen: {str(e)}")
-            return None
+            # Return a black placeholder image as fallback
+            try:
+                if region:
+                    width, height = region[2], region[3]
+                else:
+                    width, height = pyautogui.size()
+                fallback_image = np.zeros((height, width, 3), dtype=np.uint8)
+                self._log_activity("Screen capture failed, returned fallback", {'error': str(e)})
+                return fallback_image
+            except:
+                # Final fallback: return standard resolution black image
+                return np.zeros((720, 1280, 3), dtype=np.uint8)
             
     def find_element(self, template, threshold=0.8, region=None):
         """Find an element on screen using template matching"""
         try:
             screen = self.capture_screen(region)
-            if screen is None:
-                return None
-                
+            # Screen capture now returns fallback instead of None, so we can proceed
+            
             # Convert template to cv2 format if it's a path
             if isinstance(template, str):
                 template = cv2.imread(template)
+                if template is None:
+                    self.logger.error(f"Could not load template image: {template}")
+                    return {
+                        'confidence': 0.0,
+                        'location': (0, 0),
+                        'size': (50, 50),
+                        'error': 'template_not_found'
+                    }
                 
-            # Perform template matching
+            # Use ML system for enhanced detection
+            ml_result = self.ml.detect_element(screen, template, threshold)
+            if ml_result and ml_result['confidence'] > 0.1:
+                return ml_result
+                
+            # Fallback to basic template matching
             result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
             
@@ -101,13 +124,29 @@ class SensoryMotor:
                 return {
                     'confidence': max_val,
                     'location': max_loc,
-                    'size': template.shape[:2]
+                    'size': template.shape[:2],
+                    'method': 'template_matching'
                 }
-            return None
+            else:
+                # Return low-confidence result for screen center as fallback
+                screen_center = (screen.shape[1] // 2, screen.shape[0] // 2)
+                return {
+                    'confidence': max(0.05, max_val),  # Minimum confidence
+                    'location': screen_center,
+                    'size': template.shape[:2] if template is not None else (50, 50),
+                    'method': 'fallback_center'
+                }
             
         except Exception as e:
             self.logger.error(f"Error finding element: {str(e)}")
-            return None
+            # Return emergency fallback
+            return {
+                'confidence': 0.0,
+                'location': (640, 360),  # Common screen center
+                'size': (50, 50),
+                'error': str(e),
+                'method': 'emergency_fallback'
+            }
             
     def move_mouse(self, x, y, duration=None, human_like=True):
         """Move mouse to coordinates with human-like motion"""

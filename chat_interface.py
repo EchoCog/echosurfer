@@ -3,6 +3,7 @@ import json
 import uuid
 import logging
 import requests
+import time
 from urllib.parse import urljoin
 from dotenv import load_dotenv
 
@@ -125,83 +126,99 @@ class ChatInterface:
             self.logger.error(f"Authentication error: {str(e)}")
             return False
             
-    def send_query(self, query):
-        """Send a query to ChatGPT and get the response"""
-        try:
-            if not self.session_token:
-                raise ValueError("Not authenticated. Call authenticate() first.")
-            
-            # Generate message ID
-            message_id = self._generate_uuid()
-            parent_id = self.parent_message_id or self._generate_uuid()
-            
-            # Prepare payload (following the desktop app format)
-            payload = {
-                "action": "next",
-                "messages": [
-                    {
-                        "id": message_id,
-                        "author": {"role": "user"},
-                        "content": {"content_type": "text", "parts": [query]},
-                        "metadata": {}
-                    }
-                ],
-                "model": "text-davinci-002-render-sha",  # Model used by web interface
-                "parent_message_id": parent_id,
-                "timezone_offset_min": -120,
-                "suggestions": [],
-                "history_and_training_disabled": False,
-                "conversation_mode": {"kind": "primary_assistant"},
-                "force_paragen": False,
-                "force_rate_limit": False
-            }
-            
-            if self.conversation_id:
-                payload["conversation_id"] = self.conversation_id
-            
-            self.logger.info(f"Sending query: {query}")
-            response = self._make_request(
-                'POST',
-                '/backend-api/conversation',
-                json=payload,
-                stream=True,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                full_response = ""
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            line = line.decode('utf-8')
-                            if line.startswith('data: '):
-                                line = line[6:]  # Remove 'data: ' prefix
-                                if line == '[DONE]':
-                                    break
-                                try:
-                                    data = json.loads(line)
-                                    if 'message' in data:
-                                        message = data['message']
-                                        if 'content' in message and 'parts' in message['content']:
-                                            full_response = message['content']['parts'][0]
-                                            # Update conversation state
-                                            self.conversation_id = data.get('conversation_id')
-                                            self.parent_message_id = message.get('id')
-                                except json.JSONDecodeError:
-                                    continue
-                        except UnicodeDecodeError:
-                            continue
+    def send_query(self, query, max_retries=3, retry_delay=2):
+        """Send a query to ChatGPT and get the response with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                if not self.session_token:
+                    raise ValueError("Not authenticated. Call authenticate() first.")
                 
-                self.logger.info(f"Received response: {full_response}")
-                return full_response
-            else:
-                self.logger.error(f"Query failed: {response.status_code}")
-                self.logger.error(f"Error message: {response.text}")
-                return None
+                # Generate message ID
+                message_id = self._generate_uuid()
+                parent_id = self.parent_message_id or self._generate_uuid()
                 
-        except Exception as e:
-            self.logger.error(f"Error sending query: {str(e)}")
-            return None
+                # Prepare payload (following the desktop app format)
+                payload = {
+                    "action": "next",
+                    "messages": [
+                        {
+                            "id": message_id,
+                            "author": {"role": "user"},
+                            "content": {"content_type": "text", "parts": [query]},
+                            "metadata": {}
+                        }
+                    ],
+                    "model": "text-davinci-002-render-sha",  # Model used by web interface
+                    "parent_message_id": parent_id,
+                    "timezone_offset_min": -120,
+                    "suggestions": [],
+                    "history_and_training_disabled": False,
+                    "conversation_mode": {"kind": "primary_assistant"},
+                    "force_paragen": False,
+                    "force_rate_limit": False
+                }
+                
+                if self.conversation_id:
+                    payload["conversation_id"] = self.conversation_id
+                
+                self.logger.info(f"Sending query (attempt {attempt + 1}/{max_retries}): {query}")
+                response = self._make_request(
+                    'POST',
+                    '/backend-api/conversation',
+                    json=payload,
+                    stream=True,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    full_response = ""
+                    for line in response.iter_lines():
+                        if line:
+                            try:
+                                line = line.decode('utf-8')
+                                if line.startswith('data: '):
+                                    line = line[6:]  # Remove 'data: ' prefix
+                                    if line == '[DONE]':
+                                        break
+                                    try:
+                                        data = json.loads(line)
+                                        if 'message' in data:
+                                            message = data['message']
+                                            if 'content' in message and 'parts' in message['content']:
+                                                full_response = message['content']['parts'][0]
+                                                # Update conversation state
+                                                self.conversation_id = data.get('conversation_id')
+                                                self.parent_message_id = message.get('id')
+                                    except json.JSONDecodeError:
+                                        continue
+                            except UnicodeDecodeError:
+                                continue
+                    
+                    self.logger.info(f"Received response: {full_response}")
+                    return full_response
+                else:
+                    error_msg = f"Query failed: {response.status_code} - {response.text}"
+                    self.logger.error(error_msg)
+                    
+                    if attempt < max_retries - 1:
+                        self.logger.info(f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        # Final attempt failed, return fallback response
+                        return f"[ERROR: Chat service unavailable after {max_retries} attempts (HTTP {response.status_code}). Please try again later or check authentication.]"
+                        
+            except Exception as e:
+                error_msg = f"Error sending query (attempt {attempt + 1}): {str(e)}"
+                self.logger.error(error_msg)
+                
+                if attempt < max_retries - 1:
+                    self.logger.info(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    # Final attempt failed, return fallback response
+                    return f"[ERROR: Unable to send query after {max_retries} attempts - {str(e)}. The chat service may be temporarily unavailable.]"
 
 if __name__ == "__main__":
     # Test the chat interface
